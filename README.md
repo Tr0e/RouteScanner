@@ -42,7 +42,7 @@ The following relevant routing information of SpringBoot project has been collec
 
 Taking the [WebGoat](https://github.com/WebGoat/WebGoat) project as an example, the specific effect diagram is as follows (You can also refer to the effect demonstration xlsx file of this project):
 
-![在这里插入图片描述](https://i-blog.csdnimg.cn/direct/c10fb14f3b6c4243bb959117fa6f40e1.png)
+![在这里插入图片描述](https://i-blog.csdnimg.cn/direct/80671422f0c54c058584f884fa46a370.png)
 
 # How to use
 
