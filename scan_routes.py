@@ -35,15 +35,16 @@ def write_routes_to_xlsx(all_data_list):
 
 def extract_request_mapping_value(s):
     """
-    提取类开头的父级路由，通过@RequestMapping注解中的value字段的值，可能出现括号中携带除了value之外的字段，比如 method = RequestMethod.POST
+    提取类开头的父级路由，通过@RequestMapping注解中的value字段的值，
+    可能出现括号中携带除了value/path之外的字段，比如 method = RequestMethod.POST。
+    也能处理@RequestMapping("/clientSideFiltering/challenge-store")这种格式。
     """
-    pattern = r'@RequestMapping\((.*?)\)|@RequestMapping\(value\s*=\s*"(.*?)"'
+    # 匹配三种情况：带有 value、path 或者直接给出的路径
+    pattern = r'@RequestMapping\(\s*(?:(?:value|path)\s*=\s*"([^"]*)"|"(\/[^"]*)")(?:,.*?)?\)'
     match = re.search(pattern, s)
     if match:
-        if match.group(1):
-            return match.group(1).strip('"')
-        else:
-            return match.group(2)
+        # 返回匹配到的 'value' 或 'path' 字段，或者直接匹配到的路径
+        return match.group(1) or match.group(2)
     else:
         return None
 
