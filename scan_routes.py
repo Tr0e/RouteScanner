@@ -2,6 +2,7 @@ import os
 import re
 import pandas as pd
 from colorama import Fore, init
+from openpyxl import load_workbook
 
 # 配置colorama颜色自动重置，否则得手动设置Style.RESET_ALL
 init(autoreset=True)
@@ -10,27 +11,6 @@ init(autoreset=True)
 route_num = 1
 # 正则表达式来匹配Spring的路由注解、方法返回类型、方法名称和参数
 mapping_pattern = re.compile(r'@(Path|(Request|Get|Post|Put|Delete|Patch)Mapping)\(')
-
-
-def write_routes_to_xlsx(all_data_list):
-    """
-    将路由信息写入Excel文件
-    """
-    data = {
-        "Context": [item['context'] for item in all_data_list],
-        "Parent Route": [item['parent_route'] for item in all_data_list],
-        "Route": [item['route'] for item in all_data_list],
-        "Request": [item['request'] for item in all_data_list],
-        "Return Type": [item['return_type'] for item in all_data_list],
-        "Method Name": [item['method_name'] for item in all_data_list],
-        "Parameters": [item['parameters'] for item in all_data_list],
-        "File Path": [item['file_path'] for item in all_data_list],
-    }
-    writer = pd.ExcelWriter('Data.xlsx')
-    dataFrame = pd.DataFrame(data)
-    dataFrame.to_excel(writer, sheet_name="password")
-    writer.close()
-    print(Fore.BLUE + "[*] Successfully saved data to xlsx")
 
 
 def extract_request_mapping_value(s):
@@ -248,25 +228,86 @@ def extract_routes_from_file(file_path, directory, context):
     return routes
 
 
+def find_all_pom_files(directory):
+    """
+    遍历寻找指定目录下的所有 pom.xml 文件，并建立一个字典，存储文件夹名称和其绝对路径。
+    """
+    pom_dict = {}  # 初始化字典存储结果
+    # 遍历目录及其所有子目录
+    for dirPath, dirNames, fileNames in os.walk(directory):
+        # 检查当前目录中的所有文件
+        if 'pom.xml' in fileNames:
+            # 获取目录名称
+            folder_name = os.path.basename(dirPath)
+            # 将目录名称和绝对路径添加到字典中
+            pom_dict[folder_name] = os.path.abspath(dirPath)
+    return pom_dict
+
+
+def write_routes_to_xlsx(all_data_list, folder_name):
+    """
+    将路由信息写入Excel文件
+    """
+    dataSource = {
+        "Context": [item['context'] for item in all_data_list],
+        "Parent Route": [item['parent_route'] for item in all_data_list],
+        "Route": [item['route'] for item in all_data_list],
+        "Request": [item['request'] for item in all_data_list],
+        "Return Type": [item['return_type'] for item in all_data_list],
+        "Method Name": [item['method_name'] for item in all_data_list],
+        "Parameters": [item['parameters'] for item in all_data_list],
+        "File Path": [item['file_path'] for item in all_data_list],
+    }
+    if not os.path.exists('Data.xlsx'):
+        # 本地xlsx文件不存在，创建一个全新的工作簿
+        with pd.ExcelWriter('Data.xlsx', engine='openpyxl') as writer:
+            # 创建一个新的 Sheet
+            dataFrame = pd.DataFrame(dataSource)
+            dataFrame.to_excel(writer, sheet_name=folder_name, index=False)
+    else:
+        # 在已有的xlsx上新增一个Sheet
+        existing_book = load_workbook('Data.xlsx')
+        with pd.ExcelWriter('Data.xlsx', engine='openpyxl', mode='a') as writer:
+            # 获取已有工作簿的工作表字典
+            existing_worksheets = existing_book.worksheets
+            existing_sheet_names = [ws.title for ws in existing_worksheets]
+            new_dataFrame = pd.DataFrame(dataSource)
+            # 如果目标工作表不存在，则创建新的工作表并写入数据
+            if folder_name not in existing_sheet_names:
+                new_dataFrame.to_excel(writer, sheet_name=folder_name, index=False)
+            else:
+                # 如果目标工作表已存在，加载该工作表并追加数据
+                new_df_without_index = new_dataFrame.copy()
+                new_df_without_index.reset_index(drop=True, inplace=True)
+                combined_df = pd.concat([pd.read_excel('Data.xlsx', sheet_name=folder_name), new_df_without_index], ignore_index=False)
+                combined_df.to_excel(writer, sheet_name=folder_name, index=False)
+    print(Fore.BLUE + "[*]Successfully saved data to xlsx!")
+
+
 def scan_project_directory(directory):
-    context = extract_context_path(directory)
-    all_routes = []
-    for root, _, files in os.walk(directory):
-        for file in files:
-            if file.endswith('.java'):
-                file_path = os.path.join(root, file)
-                routes = extract_routes_from_file(file_path, directory, context)
-                if routes:
-                    all_routes.extend(routes)
-    return all_routes
+    pom_files = find_all_pom_files(directory)
+    # 遍历所有pom.xml文件对应的项目路径，收集路由信息
+    for folder_name, folder_path in pom_files.items():
+        print(Fore.YELLOW + f"[+]Folder Name: {folder_name}, Folder Path: {folder_path}")
+        context = extract_context_path(folder_path)
+        all_routes = []
+        for root, _, files in os.walk(folder_path):
+            for file in files:
+                if file.endswith('.java'):
+                    file_path = os.path.join(root, file)
+                    routes = extract_routes_from_file(file_path, folder_path, context)
+                    if routes:
+                        all_routes.extend(routes)
+        # 判断当前携带pom.xml文件的项目文件夹下提取的路由信息字典是否为空
+        if all_routes:
+            write_routes_to_xlsx(all_routes, folder_name)
+        else:
+            print(Fore.RED + f"[-]No routes found in this project path: {folder_path}/{folder_name}…")
 
 
 if __name__ == '__main__':
     project_directory = input("Enter the path to your Spring Boot project: ")
     # project_directory1 = r'D:\Code\Java\Github\java-sec-code-master'
-    # project_directory2 = r'D:\Code\Java\Github\java-sec-code-master\src\main\java\org\joychou\controller\othervulns'
-    # project_directory3 = r'D:\Code\Java\Github\RuoYi-master'
-    # project_directory4 = r'D:\Code\Java\WebGoat-2023.8'
-    # project_directory5 = r'D:\Code\Java\WebGoat-2023.8\src\main\java\org\owasp\webgoat\container\service'
-    routes_info = scan_project_directory(project_directory)
-    write_routes_to_xlsx(routes_info)
+    # project_directory2 = r'D:\Code\Java\Github\RuoYi-master'
+    # project_directory3 = r'D:\Code\Java\WebGoat-2023.8'
+    scan_project_directory(project_directory)
