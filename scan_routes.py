@@ -1,5 +1,18 @@
+"""
+@File：scan_routes.py
+@Time：2024/8/29
+@Auth：Tr0e
+@Github：https://github.com/Tr0e
+@Description：基于正则表达式，批量自动化解析多项目源代码的路由信息，生成可视化表格，辅助代码审计统计
+@版本迭代：
+v1.0.0 20240829，首版本开发完成；
+v1.1.0 20240830，修复父级路由识别的已知Bug；
+v1.2.0 20240831，添加对多个maven项目同时扫描的功能；
+v2.0.0 20240906，支持通过参数指定将所有路由集中在一个sheet，新增Project、Annotation（注解）两列；
+"""
 import os
 import re
+import argparse
 import pandas as pd
 from colorama import Fore, init
 from openpyxl import load_workbook
@@ -162,7 +175,7 @@ def extract_context_path(directory):
     return None
 
 
-def extract_routes_from_file(file_path, directory, context):
+def extract_routes_from_file(file_path, directory, folder, context):
     routes = []
     with open(file_path, 'r', encoding='utf-8') as file:
         content = file.read()
@@ -196,20 +209,33 @@ def extract_routes_from_file(file_path, directory, context):
                         # 获取完整的一条路由信息
                         if parent_route is not None and route is not None:
                             route = parent_route + route
-                        # 向下遍历找到函数的定义，此处考虑了路由注解下方可能还携带多个其它用途的注解
-                        j = i + 1
-                        while j < len(content_after_public_class) and not content_after_public_class[j].strip().startswith('public'):
-                            j += 1
-                        method_define = content_after_public_class[j].strip()
+
+                        # 向下遍历找到函数的定义的首行代码位置，此处考虑了路由注解下方可能还携带多个其它用途的注解
+                        method_start_line = i + 1
+                        while method_start_line < len(content_after_public_class) and not content_after_public_class[method_start_line].strip().startswith('public'):
+                            method_start_line += 1
+                        method_define = content_after_public_class[method_start_line].strip()
                         # 获取函数定义的行级代码，考虑函数定义可能跨越多行，需进行代码合并，获得完整的函数定义，否则可能导致函数参数提取残缺
-                        q = j
-                        while j < len(content_after_public_class) and not content_after_public_class[q].strip().endswith('{'):
-                            q += 1
-                            method_define = method_define + '' + content_after_public_class[q].strip()
+                        method_end_line = method_start_line
+                        while method_start_line < len(content_after_public_class) and not content_after_public_class[method_end_line].strip().endswith('{'):
+                            method_end_line += 1
+                            method_define = method_define + '' + content_after_public_class[method_end_line].strip()
                         # print(route)
                         # print(method_define)
+                        # 解析函数定义的返回值、函数名、函数参数
                         return_type, function_name, parameters = extract_function_details(method_define)
+
+                        # 获得函数对应的所有注解信息，查找函数定义所在行上方的第一个空行之前的所有数据
+                        annotation = []
+                        for j in range(method_start_line - 1, -1, -1):  # 从当前行往上查找
+                            if content_after_public_class[j].strip() == '':  # 空行
+                                break
+                            annotation.append(content_after_public_class[j].strip())  # 添加当前行到结果列表
+                        annotation.reverse()
+                        # print(Fore.RED + str(annotation))
+
                         route_info = {
+                            'project': folder,
                             'context': context,
                             'parent_route': parent_route,
                             'route': route,
@@ -217,6 +243,7 @@ def extract_routes_from_file(file_path, directory, context):
                             'return_type': return_type,
                             'method_name': function_name,
                             'parameters': parameters,
+                            'annotation': str(annotation),
                             'file_path': file_path,
                         }
                         routes.append(route_info)
@@ -235,8 +262,8 @@ def find_all_pom_files(directory):
     pom_dict = {}  # 初始化字典存储结果
     # 遍历目录及其所有子目录
     for dirPath, dirNames, fileNames in os.walk(directory):
-        # 检查当前目录中的所有文件
-        if 'pom.xml' in fileNames:
+        # 检查当前目录中的是否包含pom.xml文件和src子文件夹，需同时满足才认为当前是个maven项目根路径
+        if 'pom.xml' in fileNames and 'src' in dirNames:
             # 获取目录名称
             folder_name = os.path.basename(dirPath)
             # 将目录名称和绝对路径添加到字典中
@@ -244,18 +271,20 @@ def find_all_pom_files(directory):
     return pom_dict
 
 
-def write_routes_to_xlsx(all_data_list, folder_name):
+def write_routes_to_xlsx(all_data_list, folder_name, sheet_rule):
     """
     将路由信息写入Excel文件
     """
     dataSource = {
+        "Project": [item['project'] for item in all_data_list],
         "Context": [item['context'] for item in all_data_list],
         "Parent Route": [item['parent_route'] for item in all_data_list],
         "Route": [item['route'] for item in all_data_list],
         "Request": [item['request'] for item in all_data_list],
-        "Return Type": [item['return_type'] for item in all_data_list],
         "Method Name": [item['method_name'] for item in all_data_list],
+        "Return Type": [item['return_type'] for item in all_data_list],
         "Parameters": [item['parameters'] for item in all_data_list],
+        "Annotation": [item['annotation'] for item in all_data_list],
         "File Path": [item['file_path'] for item in all_data_list],
     }
     if not os.path.exists('Data.xlsx'):
@@ -263,28 +292,33 @@ def write_routes_to_xlsx(all_data_list, folder_name):
         with pd.ExcelWriter('Data.xlsx', engine='openpyxl') as writer:
             # 创建一个新的 Sheet
             dataFrame = pd.DataFrame(dataSource)
-            dataFrame.to_excel(writer, sheet_name=folder_name, index=False)
+            if sheet_rule == 'one':
+                dataFrame.to_excel(writer, sheet_name='all_routes', index=False)
+            elif sheet_rule == 'more':
+                dataFrame.to_excel(writer, sheet_name=folder_name, index=False)
     else:
-        # 在已有的xlsx上新增一个Sheet
         existing_book = load_workbook('Data.xlsx')
-        with pd.ExcelWriter('Data.xlsx', engine='openpyxl', mode='a') as writer:
+        with pd.ExcelWriter('Data.xlsx', engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
             # 获取已有工作簿的工作表字典
             existing_worksheets = existing_book.worksheets
             existing_sheet_names = [ws.title for ws in existing_worksheets]
             new_dataFrame = pd.DataFrame(dataSource)
             # 如果目标工作表不存在，则创建新的工作表并写入数据
-            if folder_name not in existing_sheet_names:
+            if sheet_rule == 'more' and folder_name not in existing_sheet_names:
                 new_dataFrame.to_excel(writer, sheet_name=folder_name, index=False)
-            else:
+            elif sheet_rule == 'one':
                 # 如果目标工作表已存在，加载该工作表并追加数据
                 new_df_without_index = new_dataFrame.copy()
                 new_df_without_index.reset_index(drop=True, inplace=True)
-                combined_df = pd.concat([pd.read_excel('Data.xlsx', sheet_name=folder_name), new_df_without_index], ignore_index=False)
-                combined_df.to_excel(writer, sheet_name=folder_name, index=False)
+                combined_df = pd.concat([pd.read_excel('Data.xlsx', sheet_name='all_routes'), new_df_without_index], ignore_index=False)
+                combined_df.to_excel(writer, sheet_name='all_routes', index=False)
     print(Fore.BLUE + "[*]Successfully saved data to xlsx!")
 
 
-def scan_project_directory(directory):
+def scan_project_directory(directory, sheet_rule):
+    # 判断本路径下Data.xlsx文件是否存在，存在的话先删除
+    if os.path.exists('Data.xlsx'):
+        os.remove('Data.xlsx')
     pom_files = find_all_pom_files(directory)
     # 遍历所有pom.xml文件对应的项目路径，收集路由信息
     for folder_name, folder_path in pom_files.items():
@@ -295,19 +329,24 @@ def scan_project_directory(directory):
             for file in files:
                 if file.endswith('.java'):
                     file_path = os.path.join(root, file)
-                    routes = extract_routes_from_file(file_path, folder_path, context)
+                    routes = extract_routes_from_file(file_path, folder_path, folder_name, context)
                     if routes:
                         all_routes.extend(routes)
         # 判断当前携带pom.xml文件的项目文件夹下提取的路由信息字典是否为空
         if all_routes:
-            write_routes_to_xlsx(all_routes, folder_name)
+            write_routes_to_xlsx(all_routes, folder_name, sheet_rule)
         else:
             print(Fore.RED + f"[-]No routes found in this project path: {folder_path}/{folder_name}…")
 
 
 if __name__ == '__main__':
-    project_directory = input("Enter the path to your Spring Boot project: ")
-    # project_directory1 = r'D:\Code\Java\Github\java-sec-code-master'
-    # project_directory2 = r'D:\Code\Java\Github\RuoYi-master'
-    # project_directory3 = r'D:\Code\Java\WebGoat-2023.8'
-    scan_project_directory(project_directory)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-sheet',
+                        help='Use "one" or "more" to specify whether the generated routing information is concentrated in one sheet or divided into multiple sheets by project.')
+    parser.add_argument('-dir',
+                        help='Specify the code path to be scanned')
+    args = parser.parse_args()
+    if args.sheet is not None and args.dir is not None:
+        scan_project_directory(args.dir, args.sheet.lower())
+    else:
+        print(Fore.RED + "[!]Please fully specify the -sheet and -dir parameters and values. For help, try the -h parameter.")
