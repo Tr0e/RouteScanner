@@ -237,6 +237,7 @@ def extract_routes_from_file(file_path, directory, folder, context):
                         route_info = {
                             'project': folder,
                             'context': context,
+                            'file': str(file_path.split('\\')[-1]).split('.java')[0],
                             'parent_route': parent_route,
                             'route': route,
                             'request': get_request_type(route_define),
@@ -278,6 +279,7 @@ def write_routes_to_xlsx(all_data_list, folder_name, sheet_rule):
     dataSource = {
         "Project": [item['project'] for item in all_data_list],
         "Context": [item['context'] for item in all_data_list],
+        "File": [item['file'] for item in all_data_list],
         "Parent Route": [item['parent_route'] for item in all_data_list],
         "Route": [item['route'] for item in all_data_list],
         "Request": [item['request'] for item in all_data_list],
